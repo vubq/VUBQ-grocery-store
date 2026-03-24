@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vubq_grocery}
+      POSTGRES_USER: ${POSTGRES_USER:-vubq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vubq}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vubq} -d ${POSTGRES_DB:-vubq_grocery}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - vubq-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - vubq-network
+
+  backend:
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-vubq_grocery}
+      DB_USERNAME: ${POSTGRES_USER:-vubq}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-vubq}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -8,6 +8,20 @@ plugins {
 group = 'com.vubq'
 version = '0.1.0-SNAPSHOT'
 
+def frontendDir = file("${projectDir}/../frontend")
+def generatedFrontendResourcesDir = layout.buildDirectory.dir('generated/frontend-resources')
+def generatedFrontendStaticDir = generatedFrontendResourcesDir.map { it.dir('static') }
+def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm'
+
+def isFrontendBuildSkipped = {
+    (findProperty('skipFrontendBuild')?.toString()?.toBoolean()) ?: false
+}
+
+def resolveFrontendDistDir = {
+    def overriddenDistDir = findProperty('frontendDistDir')
+    overriddenDistDir ? file(overriddenDistDir.toString()) : file("${frontendDir}/dist")
+}
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(17)
@@ -44,11 +58,79 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+sourceSets {
+    main {
+        resources {
+            srcDir generatedFrontendResourcesDir
+        }
+    }
+}
+
+tasks.register('npmCi', Exec) {
+    onlyIf {
+        !isFrontendBuildSkipped()
+    }
+    workingDir frontendDir
+    inputs.files(
+        file("${frontendDir}/package.json"),
+        file("${frontendDir}/package-lock.json")
+    )
+    outputs.dir(file("${frontendDir}/node_modules"))
+    commandLine npmCommand, 'ci'
+}
+
+tasks.register('buildFrontend', Exec) {
+    dependsOn tasks.named('npmCi')
+    onlyIf {
+        !isFrontendBuildSkipped()
+    }
+    workingDir frontendDir
+    inputs.files(
+        fileTree(dir: "${frontendDir}/src"),
+        file("${frontendDir}/index.html"),
+        file("${frontendDir}/package.json"),
+        file("${frontendDir}/package-lock.json"),
+        file("${frontendDir}/tsconfig.json"),
+        file("${frontendDir}/tsconfig.app.json"),
+        file("${frontendDir}/tailwind.config.js"),
+        file("${frontendDir}/postcss.config.js"),
+        file("${frontendDir}/vite.config.ts")
+    )
+    outputs.dir(file("${frontendDir}/dist"))
+    commandLine npmCommand, 'run', 'build'
+}
+
+tasks.register('prepareFrontendAssets', Copy) {
+    if (!isFrontendBuildSkipped()) {
+        dependsOn tasks.named('buildFrontend')
+    }
+    from({ resolveFrontendDistDir() })
+    into(generatedFrontendStaticDir)
+
+    doFirst {
+        File distDir = resolveFrontendDistDir()
+        if (!distDir.exists()) {
+            throw new GradleException("Frontend build output was not found at ${distDir}.")
+        }
+    }
+}
+
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.named('processResources') {
+    dependsOn tasks.named('prepareFrontendAssets')
+}
+
+tasks.named('bootRun') {
+    dependsOn tasks.named('prepareFrontendAssets')
 }
 
 tasks.named('bootWar') {
     archiveFileName = 'vubq-grocery-store.war'
 }
 
+tasks.named('clean') {
+    delete generatedFrontendResourcesDir
+}
